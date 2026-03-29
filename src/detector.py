@@ -2,6 +2,9 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
+import cv2
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,18 +36,18 @@ class YOLODetector:
             self.model = YOLO(self.yolo_cfg.model_path)
             self._class_names = list(self.model.names.values())
             logger.info(f"YOLO 模型已加载: {self.yolo_cfg.model_path}，类别数: {len(self._class_names)}")
-            logger.info(f"类别列表: {self._class_names}")
         except Exception as e:
             logger.error(f"加载 YOLO 模型失败: {e}")
             raise
 
-    def detect(self, frame, region) -> List[NPCInfo]:
+    def detect(self, frame, region=None) -> List[NPCInfo]:
         """
-        检测 NPC 区域内的所有 NPC。
+        检测 frame 中的所有 NPC。
 
         Args:
-            frame: numpy BGR 数组（整个截图或 NPC 区域截图）
-            region: config.Region，NPC 区域坐标
+            frame: numpy BGR 数组（直接传入要检测的图片）
+            region: 可选，用于坐标偏移。如果 frame 是截取的子区域，
+                    传入 region 可将检测坐标转换为窗口客户区坐标
 
         Returns:
             NPCInfo 列表，按置信度降序排列
@@ -54,19 +57,12 @@ class YOLODetector:
             return []
 
         try:
-            import numpy as np
+            # 直接检测，不做额外裁剪
+            results = self.model(frame, verbose=False, conf=self.yolo_cfg.confidence)
 
-            # 如果 frame 是完整截图，先裁剪 NPC 区域
-            h, w = frame.shape[:2]
-            if w > region.width + 10 or h > region.height + 10:
-                frame = frame[region.y1:region.y2, region.x1:region.x2]
-
-            results = self.model(
-                frame,
-                conf=self.yolo_cfg.confidence,
-                imgsz=self.yolo_cfg.img_size,
-                verbose=False
-            )
+            # 偏移量：region 用于将局部坐标转换为窗口坐标
+            offset_x = region.x1 if region else 0
+            offset_y = region.y1 if region else 0
 
             npcs = []
             for result in results:
@@ -77,20 +73,16 @@ class YOLODetector:
                     cls_id = int(box.cls[0])
                     conf = float(box.conf[0])
 
-                    # 获取类别名称，解析种类和星级
                     class_name = self._class_names[cls_id] if cls_id < len(self._class_names) else f"class_{cls_id}"
                     name, star = self._parse_class_name(class_name)
 
-                    # 计算中心坐标（转换为窗口客户区坐标）
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    cx = int((x1 + x2) / 2) + region.x1
-                    cy = int((y1 + y2) / 2) + region.y1
+                    cx = int((x1 + x2) / 2) + offset_x
+                    cy = int((y1 + y2) / 2) + offset_y
 
                     npcs.append(NPCInfo(
-                        name=name,
-                        star=star,
-                        cx=cx,
-                        cy=cy,
+                        name=name, star=star,
+                        cx=cx, cy=cy,
                         confidence=conf,
                         width=int(x2 - x1),
                         height=int(y2 - y1)
@@ -98,29 +90,39 @@ class YOLODetector:
 
             npcs.sort(key=lambda n: n.confidence, reverse=True)
             logger.debug(f"检测到 {len(npcs)} 个 NPC")
-            for npc in npcs:
-                logger.debug(f"  {npc.name} {npc.star}星 ({npc.cx}, {npc.cy}) conf={npc.confidence:.2f}")
-
             return npcs
 
         except Exception as e:
             logger.error(f"YOLO 推理异常: {e}")
             return []
 
-    @staticmethod
-    def _parse_class_name(class_name: str) -> tuple:
+    def detect_file(self, image_path, region=None) -> List[NPCInfo]:
         """
-        解析 YOLO 类别名称为 (种类名, 星级)。
+        便捷方法：传入图片路径直接检测。
 
-        假设类别命名格式为 "名称_星级"（如 "安妮_1", "安妮_2"）。
-        如果无法解析星级，默认返回 1 星。
+        Args:
+            image_path: 图片文件路径
+            region: 可选，坐标偏移
         """
+        img = cv2.imread(image_path)
+        if img is None:
+            logger.error(f"无法读取图片: {image_path}")
+            return []
+        return self.detect(img, region)
+
+    @staticmethod
+    def _parse_class_name(class_name: str) -> tuple[str, int]:
+        """解析 YOLO 类别名称为 (种类名, 星级)。"""
+        import re
+        # 先尝试下划线分隔: "安妮_2" → ("安妮", 2)
         if "_" in class_name:
             parts = class_name.rsplit("_", 1)
-            name = parts[0]
             try:
-                star = int(parts[1])
-                return name, star
+                return parts[0], int(parts[1])
             except ValueError:
                 pass
+        # 再尝试末尾数字: "anni2" → ("anni", 2)
+        m = re.match(r"^(.+?)(\d+)$", class_name)
+        if m:
+            return m.group(1), int(m.group(2))
         return class_name, 1

@@ -15,10 +15,12 @@ class SummonModule:
         self.summon_cfg = config.summon
         self.summon_wait = int(config.timing.summon_wait * 1000)
         self._summon_count = 0  # 累计召唤次数
+        # 获取合并策略配置（用于总星级判断）
+        self.merge_strategy = config.merge_strategy
 
         # 从配置获取固定坐标
         buttons = config.data.get("buttons", {})
-        summon_btn = buttons.get("summon", {})
+        summon_btn = buttons.get("召唤", {})
         self.summon_x = summon_btn.get("x", 0)
         self.summon_y = summon_btn.get("y", 0)
 
@@ -40,30 +42,73 @@ class SummonModule:
         return self.summon_cfg.get_slot_count(self._summon_count)
 
     def get_current_npc_count(self, npcs) -> int:
-        """获取当前 NPC 数量"""
-        return len(npcs)
+        """获取当前 NPC 数量（排除空位 kongwei）"""
+        # 过滤掉 kongwei（空位标识）
+        return sum(1 for npc in npcs if npc.name != "kongwei")
+
+    def calc_summon_count(self, npcs) -> int:
+        """
+        计算召唤次数：1星=1次，2星=2次，3星=4次。
+
+        Args:
+            npcs: 当前 NPC 列表（包含 kongwei）
+
+        Returns:
+            召唤次数
+        """
+        total = 0
+        for npc in npcs:
+            if npc.name != "kongwei":
+                # 1星=1, 2星=2, 3星=4
+                total += 2 ** (npc.star - 1)
+        return total
+
+    def get_kongwei_count(self, npcs) -> int:
+        """获取空位数量（kongwei 数量）"""
+        return sum(1 for npc in npcs if npc.name == "kongwei")
+
+    def calc_total_star(self, npcs, npc_name: str) -> int:
+        """
+        计算指定 NPC 的总星级。
+
+        Args:
+            npcs: 当前 NPC 列表（包含 kongwei）
+            npc_name: NPC 名称，如 "baofeng"
+
+        Returns:
+            总星级
+        """
+        total = 0
+        for npc in npcs:
+            if npc.name == npc_name:
+                total += npc.star
+        return total
 
     def can_summon(self, gold: int, npcs: list) -> Tuple[bool, str]:
         """
         判断是否可以召唤。
 
         Args:
-            gold: 当前金钱
-            npcs: 当前 NPC 列表
+            gold: 当前金钱（当前未使用）
+            npcs: 当前 NPC 列表（包含 kongwei）
 
         Returns:
             (是否可召唤, 原因说明)
         """
-        cost = self.get_cost()
-        if gold < cost:
-            return False, f"金钱不足: {gold} < {cost}"
+        # 1. 检查是否有空位（用 kongwei 判断）
+        kongwei_count = self.get_kongwei_count(npcs)
+        if kongwei_count <= 0:
+            return False, f"格位已满: 无空位"
 
-        npc_count = self.get_current_npc_count(npcs)
-        max_slots = self.get_max_slots()
-        if npc_count >= max_slots:
-            return False, f"格位已满: {npc_count}/{max_slots}"
+        # 2. 检查总星级是否达到阈值
+        stop_npc = self.merge_strategy.stop_summon_npc
+        stop_star = self.merge_strategy.stop_summon_total_star
+        if stop_npc and stop_star > 0:
+            total_star = self.calc_total_star(npcs, stop_npc)
+            if total_star >= stop_star:
+                return False, f"已达到 {stop_npc} 总星级阈值: {total_star}>={stop_star}"
 
-        return True, f"可召唤: 费用={cost}, 格位={npc_count}/{max_slots}"
+        return True, f"可召唤: 空位={kongwei_count}"
 
     def get_summon_button_pos(self) -> Optional[Tuple[int, int]]:
         """获取召唤按钮的固定坐标位置"""

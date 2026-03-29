@@ -73,7 +73,10 @@ class OLA:
 
     def get_client_rect(self) -> Tuple[int, int, int, int]:
         """获取窗口客户区坐标 (x1, y1, x2, y2)"""
-        return self.server.GetClientRect(self._hwnd)
+        x1, y1, x2, y2, ret = self.server.GetClientRect(self._hwnd)
+        if ret != 1:
+            logger.error(f"GetClientRect 失败，返回值: {ret}")
+        return x1, y1, x2, y2
 
     # ==================== 截图 ====================
 
@@ -99,8 +102,13 @@ class OLA:
             return None
         return bmp_data if bmp_data else None
 
-    def capture_to_numpy(self, x1: int, y1: int, x2: int, y2: int):
-        """截取区域并返回 numpy BGR 数组 (用于 YOLO)"""
+    def capture_to_numpy(self, x1: int, y1: int, x2: int, y2: int, temp: bool = True):
+        """截取区域并返回 numpy BGR 数组 (用于 YOLO)
+        
+        Args:
+            x1, y1, x2, y2: 截图区域坐标
+            temp: True=临时文件(自动删除), False=保存到 Screenshot/img 目录
+        """
         try:
             import cv2
             import numpy as np
@@ -108,20 +116,46 @@ class OLA:
             logger.error("需要安装 opencv-python 和 numpy")
             return None
 
-        data_ptr, data_len, stride, ret = self.server.GetScreenData(x1, y1, x2, y2)
-        if ret != 1 or data_ptr == 0:
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        if temp:
+            # 临时文件放到 Screenshot/temp
+            temp_dir = os.path.join(base_dir, "Screenshot", "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_file = os.path.join(temp_dir, f"capture_{id(self)}.png")
+        else:
+            # 非临时文件放到 Screenshot/img
+            img_dir = os.path.join(base_dir, "Screenshot", "img")
+            os.makedirs(img_dir, exist_ok=True)
+            import time
+            temp_file = os.path.join(img_dir, f"capture_{int(time.time()*1000)}.png")
+
+        # 使用 capture 方法保存到文件
+        ret = self.server.Capture(x1, y1, x2, y2, temp_file)
+        if ret != 1:
+            logger.error(f"capture 失败，返回值: {ret}")
             return None
 
-        width = x2 - x1
-        height = y2 - y1
-        buf = (ctypes.c_ubyte * (stride * height))()
-        ctypes.memmove(buf, data_ptr, stride * height)
-        self.server.FreeImageData(data_ptr)
+        # 读取文件为 numpy 数组
+        if not os.path.exists(temp_file):
+            logger.error(f"截图文件未生成: {temp_file}")
+            return None
 
-        arr = np.frombuffer(buf, dtype=np.uint8).reshape((height, stride // 3, 3))
-        # 截取实际宽度（stride 可能包含对齐填充）
-        arr = arr[:, :width, :]
-        return arr
+        img = cv2.imread(temp_file)
+        
+        # 临时文件用完删除
+        if temp:
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+        if img is None:
+            logger.error("截图文件解码失败")
+            return None
+
+        return img
 
     # ==================== 找图 ====================
 
@@ -149,6 +183,10 @@ class OLA:
     def ocr_v5(self, x1: int, y1: int, x2: int, y2: int) -> str:
         """OCR V5 识别指定区域的文字"""
         return self.server.OcrV5(x1, y1, x2, y2)
+
+    def ocr_details(self, x1: int, y1: int, x2: int, y2: int) -> dict:
+        """OCR 识别指定区域的文字及坐标，返回包含文字块信息的字典"""
+        return self.server.OcrDetails(x1, y1, x2, y2)
 
     # ==================== 鼠标操作 ====================
 

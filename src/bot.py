@@ -161,6 +161,18 @@ class GameBot:
 
         logger.info("战斗开始，进入召唤+合成循环")
 
+        # 初始化阶段：连续召唤7次快速填满空位
+        if self.summon_module.summon_count == 0:
+            logger.info("初始化阶段，连续召唤7次填满空位")
+            init_summon_count = 7
+            for i in range(init_summon_count):
+                # 直接召唤，无需检查金币
+                self.summon_module.execute_summon([])
+                logger.info(f"初始化召唤 {i+1}/{init_summon_count}")
+                self.ola.sleep(interval)
+            # 初始化召唤完成，等待一下让NPC出现
+            self.ola.sleep(interval)
+
         while not self._stop_requested:
             # 超时检测
             if time.time() - battle_start > timeout:
@@ -190,16 +202,26 @@ class GameBot:
             logger.info(f"当前金钱: {gold}")
 
             # 3. 合成：找到可合成配对并执行
-            merge_count = self.merge_module.merge_all(npcs)
+            # 3a. 先尝试合成非保护 NPC
+            merge_count = self.merge_module.merge_all(npcs, include_protected=False)
             if merge_count > 0:
                 # 合成后需要重新检测（NPC 数量/位置变化）
                 logger.info(f"执行了 {merge_count} 次合成，等待后重新检测")
                 self.ola.sleep(interval)
                 continue
 
+            # 3b. 如果没有可合成的，且格位满无法召唤，再尝试合成保护 NPC
+            can_summon, reason = self.summon_module.can_summon(gold, npcs)
+            if not can_summon and "格位" in reason:
+                logger.info("格位已满且无其他可合成，尝试合成保护 NPC")
+                merge_count = self.merge_module.merge_all(npcs, include_protected=True)
+                if merge_count > 0:
+                    logger.info(f"执行了 {merge_count} 次保护 NPC 合成，等待后重新检测")
+                    self.ola.sleep(interval)
+                    continue
+
             # 4. 召唤：判断是否可召唤
-            can, reason = self.summon_module.can_summon(gold, npcs)
-            if can:
+            if can_summon:
                 self.summon_module.execute_summon(npcs)
                 # 召唤后等待新 NPC 出现
                 self.ola.sleep(interval)

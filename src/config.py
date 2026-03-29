@@ -43,8 +43,17 @@ class SummonConfig:
     cost_increment: int = 1
     initial_slots: int = 7
     slots_per_summons: int = 5
+    cost_table: list = None
+
+    def __post_init__(self):
+        if self.cost_table is None:
+            self.cost_table = []
 
     def get_cost(self, summon_count: int) -> int:
+        """获取召唤费用，优先使用费用表"""
+        if self.cost_table and summon_count < len(self.cost_table):
+            return self.cost_table[summon_count]
+        # 降级使用旧公式
         return self.base_cost + summon_count * self.cost_increment
 
     def get_slot_count(self, summon_count: int) -> int:
@@ -56,6 +65,32 @@ class YoloConfig:
     model_path: str = "yolov8/best.pt"
     confidence: float = 0.5
     img_size: int = 640
+
+
+@dataclass
+class ProtectedNPC:
+    """受保护的 NPC 配置"""
+    name: str
+    star: int
+
+
+@dataclass
+class MergeStrategyConfig:
+    protected: list = field(default_factory=list)
+    max_star: int = 4
+    stop_summon_npc: str = ""          # 达到星级阈值时停止召唤的 NPC 名称
+    stop_summon_total_star: int = 0   # 总星级阈值，0 表示不限制
+
+    def is_protected(self, name: str, star: int) -> bool:
+        """检查 NPC 是否受保护"""
+        for p in self.protected:
+            if isinstance(p, dict):
+                if p.get("name") == name and p.get("star") == star:
+                    return True
+            elif isinstance(p, ProtectedNPC):
+                if p.name == name and p.star == star:
+                    return True
+        return False
 
 
 class Config:
@@ -111,18 +146,24 @@ class Config:
     def get_template_path(self, name: str) -> str:
         return self._data.get("templates", {}).get(name, "")
 
+    def get_button(self, name: str) -> tuple[int, int]:
+        """获取按钮坐标，返回 (x, y)"""
+        btn = self._data.get("buttons", {}).get(name, {})
+        return btn.get("x", 0), btn.get("y", 0)
+
     @property
     def match_threshold(self) -> float:
         return self._data.get("match_threshold", 0.8)
 
     @property
     def summon(self) -> SummonConfig:
-        s = self._data.get("summon", {})
+        s = self._data.get("召唤", {})
         return SummonConfig(
             base_cost=s.get("base_cost", 1),
             cost_increment=s.get("cost_increment", 1),
-            initial_slots=s.get("initial_slots", 7),
-            slots_per_summons=s.get("slots_per_summons", 5)
+            initial_slots=s.get("初始格位", 7),
+            slots_per_summons=s.get("每次新增格位召唤次数", 5),
+            cost_table=s.get("费用表", [])
         )
 
     @property
@@ -152,5 +193,25 @@ class Config:
         return self._data.get("log_level", "INFO")
 
     @property
+    def merge_strategy(self) -> MergeStrategyConfig:
+        m = self._data.get("merge_strategy", {})
+        return MergeStrategyConfig(
+            protected=m.get("protected", []),
+            max_star=m.get("max_star", 4),
+            stop_summon_npc=m.get("stop_summon_npc", ""),
+            stop_summon_total_star=m.get("stop_summon_total_star", 0)
+        )
+
+    @property
     def data(self) -> Dict[str, Any]:
         return self._data
+
+    @property
+    def enhance_cost_table(self) -> list:
+        """强化费用表，如 [100, 200, 400, 600, 1000, 1500, 1800, 2500, 3000, 3500]"""
+        return self._data.get("强化费用表", [])
+
+    @property
+    def card_priority(self) -> dict:
+        """卡牌词条优先级，如 {"千刃横飞": 1, "终焉风狱": 2, ...}"""
+        return self._data.get("词条优先级", {})
