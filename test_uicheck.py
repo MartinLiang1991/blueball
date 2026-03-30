@@ -1,6 +1,8 @@
 """主界面检测单元测试"""
+import os
 import time
 import logging
+from datetime import datetime
 from src import Config, OLA, UICheck, YOLODetector
 from src.gold import GoldDetector
 from src.merge import MergeModule
@@ -14,6 +16,8 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%H:%M:%S'
 )
+
+logger = logging.getLogger("test_battle")
 
 
 def test_return_to_main():
@@ -133,100 +137,212 @@ def test_battle():
     enhance_module = EnhanceModule(config, ola)
     decision_module = DecisionModule(config, summon_module, enhance_module, merge_module)
 
-    # 重置计数（新副本开始）
-    summon_module.reset_count()
-    enhance_module.reset_count()
-
     # 区域配置：右侧棋盘
     right_region = config.get_region("右侧棋盘区域")
 
     print("战斗流程综合测试开始\n")
 
+    # 外层循环：多轮战斗流程
+    while True:
+        # 重置计数（新副本开始）
+        summon_module.reset_count()
+        enhance_module.reset_count()
+
+        # 执行单轮战斗
+        battle_result = _run_single_battle(
+            config, ola, check, detector, gold_detector,
+            merge_module, summon_module, enhance_module, decision_module,
+            right_region
+        )
+
+        if battle_result == "restart":
+            # 返回主界面后继续下一轮
+            print("\n" + "=" * 40)
+            print("开始新一轮战斗")
+            print("=" * 40)
+            continue
+        elif battle_result == "quit":
+            # 测试终止
+            break
+        else:
+            # 其他情况（超时等）
+            break
+
+    ola.cleanup()
+
+
+def _run_single_battle(config, ola, check, detector, gold_detector,
+                       merge_module, summon_module, enhance_module, decision_module,
+                       right_region):
+    """执行单轮战斗流程，返回 'restart' 表示继续下一轮，'quit' 表示终止"""
+
     try:
-        # 外层循环：整个战斗流程
-        while True:
-            # 1. 检查是否已经在战斗
+        # 0. 检查是否已在战斗界面
+        already_in_battle = check.is_in_battle()
+
+        if already_in_battle:
+            print("已在战斗界面，跳过体力检查")
+        else:
+            # 体力检查（需先确保在主界面）
             print("=" * 40)
-            print("步骤1: 检查战斗状态")
+            print("步骤0: 体力检查")
             print("=" * 40)
-            in_battle = check.is_in_battle()
-            if in_battle:
-                print("已在战斗中，跳过找队伍")
-                break
-            else:
-                # 2. 找队伍
-                print("\n" + "=" * 40)
-                print("步骤2: 寻找队伍")
-                print("=" * 40)
-                team_result = check.find_team(max_attempts=10)
-                if not team_result:
-                    print("找队伍失败，测试终止")
-                    return
-                print(f"成功加入队伍: {team_result}")
 
-                # 3. 等待进入战斗界面
-                print("\n" + "=" * 40)
-                print("步骤3: 等待进入战斗界面")
-                print("=" * 40)
-                max_wait = 20  # 最多等待60秒
-                waited = 0
-                prepare_clicked = False  # 是否已点击准备
-                prepare_time = 0  # 点击准备的时间
-                ready_to_restart = False  # 是否需要重新开始
+            # 先确保在主界面
+            if not check.is_main_screen():
+                print("当前不在主界面，尝试返回主界面")
+                if not check.return_to_main(max_attempts=10):
+                    print("返回主界面失败")
+                    return "restart"
+                time.sleep(1)
 
-                while waited < max_wait:
-                    time.sleep(1)
-                    waited += 1
+        def check_and_claim_stamina():
+            """检查体力，不足时领取体力"""
+            # 识别主界面体力区域
+            stamina_region = config.get_region("主界面体力")
+            stamina_text = ola.ocr(stamina_region.x1, stamina_region.y1, stamina_region.x2, stamina_region.y2)
+            logger.info(f"体力 OCR 结果: '{stamina_text}'")
 
-                    # 检测是否在战斗界面
-                    if check.is_in_battle():
-                        in_battle = True
-                        print(f"已进入战斗界面（等待 {waited} 秒）")
-                        break
+            # 解析体力值（格式如 "65/80" 或 "10/80"）
+            current_stamina = 0
+            if stamina_text and "/" in stamina_text:
+                try:
+                    current_stamina = int(stamina_text.split("/")[0].strip())
+                except ValueError:
+                    logger.warning(f"体力解析失败: {stamina_text}")
 
-                    # 检测是否处于准备状态
-                    if check.is_ready():
-                        if not prepare_clicked:
-                            # 点击战斗准备按钮
-                            prepare_x, prepare_y = config.get_button("战斗准备")
-                            if prepare_x != 0 or prepare_y != 0:
-                                print(f"检测到准备状态，点击战斗准备按钮 ({prepare_x}, {prepare_y})")
-                                ola.left_click(prepare_x, prepare_y)
-                                time.sleep(0.5)  # 等待界面刷新
+            logger.info(f"当前体力: {current_stamina}")
 
-                                # 再次 OCR 确认是否点击成功（显示"取消准备"表示成功）
-                                region = config.get_region("准备检测")
-                                confirm_text = ola.ocr(region.x1, region.y1, region.x2, region.y2)
-                                confirm_text = confirm_text.strip() if confirm_text else ""
-                                if "取消准备" in confirm_text:
-                                    print(f"点击成功，已进入准备状态（OCR: '{confirm_text}')")
-                                    prepare_clicked = True
-                                    prepare_time = waited
-                                    continue
-                                else:
-                                    print(f"点击后 OCR 结果: '{confirm_text}'，未检测到'取消准备'")
-                            continue
+            # 每次战斗消耗20点体力
+            if current_stamina < 20:
+                print("体力不足20点，需要领取体力")
+
+                # 点击体力按钮
+                体力_x, 体力_y = config.get_button("体力")
+                if 体力_x != 0 or 体力_y != 0:
+                    print(f"点击体力按钮 ({体力_x}, {体力_y})")
+                    ola.left_click(体力_x, 体力_y)
+                    time.sleep(0.5)
+
+                    # 点击食堂按钮
+                    食堂_x, 食堂_y = config.get_button("食堂")
+                    if 食堂_x != 0 or 食堂_y != 0:
+                        print(f"点击食堂按钮 ({食堂_x}, {食堂_y})")
+                        ola.left_click(食堂_x, 食堂_y)
+                        time.sleep(0.5)
+
+                        # 点击两次领体力按钮
+                        领体力_x, 领体力_y = config.get_button("领体力")
+                        if 领体力_x != 0 or 领体力_y != 0:
+                            for i in range(2):
+                                print(f"点击领体力按钮 #{i+1} ({领体力_x}, {领体力_y})")
+                                ola.left_click(领体力_x, 领体力_y)
+                                time.sleep(0.1)
                         else:
-                            # 已点击准备，检查是否超过20秒未进入战斗
-                            if waited - prepare_time >= 20:
-                                print(f"点击准备后超过20秒未进入战斗，返回主界面重新开始")
-                                check.return_to_main(max_attempts=10)
-                                ready_to_restart = True
-                                break
+                            print("未配置领体力按钮坐标")
+                    else:
+                        print("未配置食堂按钮坐标")
+                else:
+                    print("未配置体力按钮坐标")
 
-                    print(f"等待进入战斗... ({waited}/{max_wait})")
+                # 等待回到主界面
+                time.sleep(1)
+                logger.info("领取体力完成")
 
-                # 如果准备超时，重新开始整个流程
-                if ready_to_restart:
-                    print("准备超时，流程重新开始")
-                    time.sleep(2)
-                    continue
+                # 再次检查体力
+                stamina_text = ola.ocr(stamina_region.x1, stamina_region.y1, stamina_region.x2, stamina_region.y2)
+                logger.info(f"领取后体力 OCR 结果: '{stamina_text}'")
+                if stamina_text and "/" in stamina_text:
+                    try:
+                        current_stamina = int(stamina_text.split("/")[0].strip())
+                    except ValueError:
+                        pass
+                logger.info(f"领取后体力: {current_stamina}")
 
-                if not in_battle:
-                    print("超时未进入战斗界面，测试终止")
-                    return
+        # 执行体力检查和领取（仅非战斗状态下）
+        if not already_in_battle:
+            check_and_claim_stamina()
 
-                break  # 成功进入战斗，跳出外层循环
+        # 1. 检查是否已经在战斗
+        print("=" * 40)
+        print("步骤1: 检查战斗状态")
+        print("=" * 40)
+        in_battle = already_in_battle
+        if in_battle:
+            print("已在战斗中，跳过找队伍")
+        else:
+            # 2. 找队伍
+            print("\n" + "=" * 40)
+            print("步骤2: 寻找队伍")
+            print("=" * 40)
+            team_result = check.find_team(max_attempts=10)
+            if not team_result:
+                print("找队伍失败，测试终止")
+                return "quit"
+            print(f"成功加入队伍: {team_result}")
+
+            # 3. 等待进入战斗界面
+            print("\n" + "=" * 40)
+            print("步骤3: 等待进入战斗界面")
+            print("=" * 40)
+            max_wait = 20  # 最多等待60秒
+            waited = 0
+            prepare_clicked = False  # 是否已点击准备
+            prepare_time = 0  # 点击准备的时间
+            ready_to_restart = False  # 是否需要重新开始
+
+            while waited < max_wait:
+                time.sleep(1)
+                waited += 1
+
+                # 检测是否在战斗界面
+                if check.is_in_battle():
+                    in_battle = True
+                    print(f"已进入战斗界面（等待 {waited} 秒）")
+                    break
+
+                # 检测是否处于准备状态
+                if check.is_ready():
+                    if not prepare_clicked:
+                        # 点击战斗准备按钮
+                        prepare_x, prepare_y = config.get_button("战斗准备")
+                        if prepare_x != 0 or prepare_y != 0:
+                            print(f"检测到准备状态，点击战斗准备按钮 ({prepare_x}, {prepare_y})")
+                            ola.left_click(prepare_x, prepare_y)
+                            time.sleep(0.5)  # 等待界面刷新
+
+                            # 再次 OCR 确认是否点击成功（显示"取消准备"表示成功）
+                            region = config.get_region("准备检测")
+                            confirm_text = ola.ocr(region.x1, region.y1, region.x2, region.y2)
+                            confirm_text = confirm_text.strip() if confirm_text else ""
+                            if "取消准备" in confirm_text:
+                                print(f"点击成功，已进入准备状态（OCR: '{confirm_text}')")
+                                prepare_clicked = True
+                                prepare_time = waited
+                                continue
+                            else:
+                                print(f"点击后 OCR 结果: '{confirm_text}'，未检测到'取消准备'")
+                        continue
+                    else:
+                        # 已点击准备，检查是否超过20秒未进入战斗
+                        if waited - prepare_time >= 20:
+                            print(f"点击准备后超过20秒未进入战斗，返回主界面重新开始")
+                            check.return_to_main(max_attempts=10)
+                            ready_to_restart = True
+                            break
+
+                print(f"等待进入战斗... ({waited}/{max_wait})")
+
+            # 如果准备超时，重新开始整个流程
+            if ready_to_restart:
+                print("准备超时，流程重新开始")
+                time.sleep(2)
+                return "restart"
+
+            if not in_battle:
+                print("超时未进入战斗界面，组队异常，返回主界面重新开始")
+                check.return_to_main(max_attempts=10)
+                return "restart"
 
         # 进入战斗后，关闭伤害数值显示（飘字开关）
         print("\n" + "=" * 40)
@@ -250,24 +366,21 @@ def test_battle():
                 return detector.detect(frame_right, right_region)
             return []
 
-        # 步骤3.6: 初始阶段连续召唤7次填满空位
+        # 步骤3.6: 初始阶段快速连续点击召唤按钮7次
         print("\n" + "=" * 40)
-        print("步骤3.6: 初始阶段连续召唤7次填满空位")
+        print("步骤3.6: 初始阶段快速连续点击召唤按钮7次")
         print("=" * 40)
-        init_summon_count = 7
-        for i in range(init_summon_count):
-            print(f"初始召唤 #{i+1}/{init_summon_count}")
-            # 检测当前空位
-            current_npcs = detect_all_npcs()
-            current_kongwei = sum(1 for n in current_npcs if n.name == "kongwei")
-            print(f"  当前空位: {current_kongwei}")
-            if current_kongwei <= 0:
-                print("  空位已满，停止初始召唤")
-                break
-            # 执行召唤
-            summon_module.execute_summon(current_npcs)
-            time.sleep(0.8)  # 快速连续召唤，间隔短一些
-        print("初始召唤完成")
+        summon_x, summon_y = config.get_button("召唤")
+        if summon_x != 0 or summon_y != 0:
+            for i in range(7):
+                print(f"点击召唤按钮 #{i+1}/7")
+                ola.left_click(summon_x, summon_y)
+                time.sleep(0.1)  # 快速连续点击，间隔0.1秒
+            # 同步召唤计数（7次快速召唤）
+            summon_module._summon_count = 7
+            print("初始召唤完成")
+        else:
+            print("未配置召唤按钮坐标")
 
         # 4. 战斗中检测 NPC
         print("\n" + "=" * 40)
@@ -283,6 +396,18 @@ def test_battle():
             if check.check_battle_end():
                 battle_ended = True
                 print(f"\n战斗结束（战斗时长 {waited} 秒，共检测 {npc_detect_count} 次）")
+
+                # 截图保存到 Screenshot/result 文件夹
+                result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Screenshot", "result")
+                os.makedirs(result_dir, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d%H%M")
+                screenshot_path = os.path.join(result_dir, f"{timestamp}.png")
+
+                # 截取整个窗口
+                x1, y1, x2, y2 = ola.get_client_rect()
+                ret = ola.capture(x1, y1, x2, y2, screenshot_path)
+                print(f"截图已保存: {screenshot_path}, 返回码: {ret}")
+
                 break
 
             # 每2秒检测一次 NPC
@@ -360,7 +485,7 @@ def test_battle():
 
         if not battle_ended:
             print("超时战斗未结束，测试终止")
-            return
+            return "quit"
 
         # 5. 返回主界面
         print("\n" + "=" * 40)
@@ -369,15 +494,14 @@ def test_battle():
         time.sleep(2)  # 等待结算界面
         if check.return_to_main(max_attempts=10):
             print("成功返回主界面")
+            return "restart"
         else:
             print("返回主界面失败")
+            return "quit"
 
-        print("\n" + "=" * 40)
-        print("战斗流程测试完成")
-        print("=" * 40)
-
-    finally:
-        ola.cleanup()
+    except Exception as e:
+        print(f"战斗流程出错: {e}")
+        return "quit"
 
 
 def main():

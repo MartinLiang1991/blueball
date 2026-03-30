@@ -263,6 +263,29 @@ class UICheck:
             # 3次都通过，认为战斗结束
             logger.info("战斗结束校验: 3次校验均通过，确认战斗结束")
 
+            # 截图保存到 Screenshot/result/日期 文件夹
+            import os
+            from datetime import datetime
+            now = datetime.now()
+            date_str = now.strftime("%Y%m%d")  # 日期子文件夹，如 20260330
+            time_str = now.strftime("%H%M")     # 时间命名，如 0822
+            result_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Screenshot", "result", date_str)
+            os.makedirs(result_dir, exist_ok=True)
+            screenshot_path = os.path.join(result_dir, f"{time_str}.png")
+
+            # 截取整个窗口，使用配置文件中的"整体窗口"区域
+            try:
+                window_region = self.config.get_region("整体窗口")
+                x1, y1, x2, y2 = window_region.x1, window_region.y1, window_region.x2, window_region.y2
+                logger.info(f"使用整体窗口区域截图: ({x1}, {y1}, {x2}, {y2})")
+                ret = self.ola.capture(x1, y1, x2, y2, screenshot_path)
+                if ret == 1:
+                    logger.info(f"截图已保存: {screenshot_path}")
+                else:
+                    logger.warning(f"截图失败，返回码: {ret}")
+            except Exception as e:
+                logger.error(f"截图异常: {e}")
+
             # 循环点击"战斗结束"按钮并尝试返回主界面
             战斗结束_x, 战斗结束_y = self.config.get_button("战斗结束")
             if 战斗结束_x > 0 and 战斗结束_y > 0:

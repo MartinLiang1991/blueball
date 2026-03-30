@@ -1,0 +1,6 @@
+# 编译缓存
+__pycache__/
+*.pyc
+
+# 截图
+Screenshot/
