@@ -1,8 +1,6 @@
 import logging
 from typing import Optional, Tuple
 
-from .detector import NPCInfo
-
 logger = logging.getLogger(__name__)
 
 
@@ -15,8 +13,6 @@ class SummonModule:
         self.summon_cfg = config.summon
         self.summon_wait = int(config.timing.summon_wait * 1000)
         self._summon_count = 0  # 累计召唤次数
-        # 获取合并策略配置（用于总星级判断）
-        self.merge_strategy = config.merge_strategy
 
         # 从配置获取固定坐标
         buttons = config.data.get("buttons", {})
@@ -67,23 +63,6 @@ class SummonModule:
         """获取空位数量（kongwei 数量）"""
         return sum(1 for npc in npcs if npc.name == "kongwei")
 
-    def calc_total_star(self, npcs, npc_name: str) -> int:
-        """
-        计算指定 NPC 的总星级。
-
-        Args:
-            npcs: 当前 NPC 列表（包含 kongwei）
-            npc_name: NPC 名称，如 "baofeng"
-
-        Returns:
-            总星级
-        """
-        total = 0
-        for npc in npcs:
-            if npc.name == npc_name:
-                total += npc.star
-        return total
-
     def can_summon(self, gold: int, npcs: list) -> Tuple[bool, str]:
         """
         判断是否可以召唤。
@@ -99,14 +78,6 @@ class SummonModule:
         kongwei_count = self.get_kongwei_count(npcs)
         if kongwei_count <= 0:
             return False, f"格位已满: 无空位"
-
-        # 2. 检查总星级是否达到阈值
-        stop_npc = self.merge_strategy.stop_summon_npc
-        stop_star = self.merge_strategy.stop_summon_total_star
-        if stop_npc and stop_star > 0:
-            total_star = self.calc_total_star(npcs, stop_npc)
-            if total_star >= stop_star:
-                return False, f"已达到 {stop_npc} 总星级阈值: {total_star}>={stop_star}"
 
         return True, f"可召唤: 空位={kongwei_count}"
 

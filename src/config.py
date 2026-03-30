@@ -78,8 +78,6 @@ class ProtectedNPC:
 class MergeStrategyConfig:
     protected: list = field(default_factory=list)
     max_star: int = 4
-    stop_summon_npc: str = ""          # 达到星级阈值时停止召唤的 NPC 名称
-    stop_summon_total_star: int = 0   # 总星级阈值，0 表示不限制
 
     def is_protected(self, name: str, star: int) -> bool:
         """检查 NPC 是否受保护"""
@@ -197,9 +195,7 @@ class Config:
         m = self._data.get("merge_strategy", {})
         return MergeStrategyConfig(
             protected=m.get("protected", []),
-            max_star=m.get("max_star", 4),
-            stop_summon_npc=m.get("stop_summon_npc", ""),
-            stop_summon_total_star=m.get("stop_summon_total_star", 0)
+            max_star=m.get("max_star", 4)
         )
 
     @property

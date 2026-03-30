@@ -89,14 +89,15 @@ class MergeModule:
             logger.error(f"合成操作异常: {e}")
             return False
 
-    def merge_all(self, npcs: List[NPCInfo], include_protected: bool = False, max_merge_star: int = 0) -> int:
+    def merge_all(self, npcs: List[NPCInfo], include_protected: bool = False, max_merge_star: int = 0, max_count: int = 1) -> int:
         """
-        执行所有可合成的配对。
+        执行可合成的配对。
 
         Args:
             npcs: 当前 NPC 列表
             include_protected: 是否包含受保护的 NPC
             max_merge_star: 允许合并的保护 NPC 的最高星级（0 表示不限制）
+            max_count: 最多合成几对，默认 1（合成结果随机，保守合成）
 
         Returns:
             本次执行的合成次数
@@ -104,6 +105,8 @@ class MergeModule:
         pairs = self.find_merge_pairs(npcs, include_protected, max_merge_star)
         count = 0
         for npc1, npc2 in pairs:
+            if count >= max_count:
+                break
             if self.execute_merge(npc1, npc2):
                 count += 1
         return count
